@@ -27,6 +27,8 @@ import com.neovisionaries.ws.client.WebSocketFactory;
 import com.neovisionaries.ws.client.WebSocketFrame;
 import com.neovisionaries.ws.client.WebSocketListener;
 import com.neovisionaries.ws.client.WebSocketState;
+
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.Queue;
@@ -71,6 +73,10 @@ public class Meteor {
 	private boolean mConnected;
 	private String mLoggedInUserId;
 	private final DataStore mDataStore;
+
+	// Manage subscriptions
+	private List<MeteorSubscriptionObject> subscriptions;
+	private List<MeteorSubscriptionObject> subscriptionsToRestore;
 
 	/**
 	 * Returns a new instance for a client connecting to a server via DDP over websocket
@@ -211,6 +217,10 @@ public class Meteor {
 
 		// count the number of failed attempts to re-connect
 		mReconnectAttempts = 0;
+
+		// Initialize subscriptions
+		subscriptions = new ArrayList<MeteorSubscriptionObject>();
+		subscriptionsToRestore = new ArrayList<MeteorSubscriptionObject>();
 	}
 
 	/** Attempts to establish the connection to the server */
@@ -294,6 +304,33 @@ public class Meteor {
 		}
 		else {
 			throw new IllegalStateException("You must have called the 'connect' method before you can disconnect again");
+		}
+	}
+
+	/**
+	 * Pause the meteor server. Saves in a list the current subscriptions and clears the
+	 * actual subscriptions list
+	 */
+	public void pause() {
+		this.disconnect();
+
+		// Copy the list of previous subscriptions and clear the new one
+		// to be ready for the subscriptions that will be added.
+		subscriptionsToRestore = new ArrayList<>(subscriptions);
+		subscriptions = new ArrayList<>();
+	}
+
+	/**
+	 * Resume the meteor connection and resubscribe to topics
+	 */
+	public void resume() {
+		this.reconnect();
+
+		if(subscriptionsToRestore.size() > 0) {
+			// Subscribe to all previous subscriptions
+			for (MeteorSubscriptionObject subscription : subscriptionsToRestore)
+				this.subscribe(subscription.getSubscriptionName(),
+						subscription.getParams(), subscription.getListener());
 		}
 	}
 
@@ -1111,6 +1148,11 @@ public class Meteor {
 		// create a new unique ID for this request
 		final String subscriptionId = uniqueID();
 
+		// Update the subscriptions array
+		MeteorSubscriptionObject subscription =
+				new MeteorSubscriptionObject(subscriptionName, params, listener, subscriptionId);
+		subscriptions.add(subscription);
+
 		// save a reference to the listener to be executed later
 		if (listener != null) {
 			mListeners.put(subscriptionId, listener);
@@ -1148,6 +1190,14 @@ public class Meteor {
 	 * @param listener the listener to call on success/error
 	 */
 	public void unsubscribe(final String subscriptionId, final UnsubscribeListener listener) {
+		for (MeteorSubscriptionObject subscription :
+				subscriptions) {
+			if (subscription.getSubscriptionID().equals(subscriptionId)) {
+				subscriptions.remove(subscription);
+				break;
+			}
+		}
+
 		// save a reference to the listener to be executed later
 		if (listener != null) {
 			mListeners.put(subscriptionId, listener);
